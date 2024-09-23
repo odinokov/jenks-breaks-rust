@@ -83,6 +83,7 @@ print("(Minimum value)                                                          
 
 ```python
 from jenks_breaks import jenks_breaks_optimized
+# pip install jenkspy
 from jenkspy import JenksNaturalBreaks
 import numpy as np
 
