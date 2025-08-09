@@ -1,17 +1,18 @@
 [package]
 name = "jenks_breaks"
 version = "0.1.0"
-edition = "2021"
+edition = "2025"
 
-# Metadata for building a Python extension module
 [lib]
+name = "jenks_breaks"
 crate-type = ["cdylib"]
 
 [dependencies]
-# PyO3 is required for binding Rust with Python
-pyo3 = { version = "0.18", features = ["extension-module"] }
-rayon = "1.5"  # for parallel iterators
+pyo3 = { version = "0.21", features = ["extension-module"] }
+numpy = "0.21"
 
-[build-dependencies]
-# Maturin helps build the Rust code as a Python extension
-maturin = "1.7.1"
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+debug-assertions = false
