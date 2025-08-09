@@ -97,11 +97,11 @@ data = np.sort(np.random.uniform(-1000, 1000, 10000))
 jnb = JenksNaturalBreaks(5)
 
 %timeit jnb.fit(data)
-# Output: 215 ms ± 16.3 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+# 343 ms ± 6.57 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
 
 # Benchmarking jenks_breaks (Rust)
 %timeit jenks_breaks_optimized(data, 5)
-# Output: 317 ms ± 6.72 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+# Output: 4.23 ms ± 979 µs per loop (mean ± std. dev. of 7 runs, 100 loops each)
 
 # Seed for reproducibility
 np.random.seed(42)
@@ -111,11 +111,11 @@ data = np.sort(np.random.uniform(-10, 10, 100))
 # https://github.com/mthh/jenkspy
 
 %timeit jnb.fit(data)
-# Output: 92.9 μs ± 2.89 μs per loop (mean ± std. dev. of 7 runs, 10,000 loops each)
+# Output: 150 µs ± 37.2 µs per loop (mean ± std. dev. of 7 runs, 10000 loops each)
 
 # Benchmarking jenks_breaks (Rust)
 %timeit jenks_breaks_optimized(data, 5)
-# Output: 38.8 μs ± 1.62 μs per loop (mean ± std. dev. of 7 runs, 10,000 loops each)
+# Output: 17.9 µs ± 4.77 µs per loop (mean ± std. dev. of 7 runs, 100000 loops each)
 ```
 
 ## License
