@@ -14,7 +14,7 @@ This method calculates optimal class boundaries for numerical data, typically us
 
 ```bash
    git clone https://github.com/odinokov/jenks-breaks-rust.git
-   pip install ./jenks-breaks-rust/dist/jenks_breaks-0.1.0-cp310-cp310-manylinux_2_34_x86_64.whl
+   pip install ./jenks-breaks-rust/wheels/jenks_breaks-0.1.0-cp311-cp311-manylinux_2_34_x86_64.whl
    ```
 
 ## Building from Source
