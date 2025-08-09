@@ -112,7 +112,7 @@ fn jenks_breaks_optimized<'py>(
 }
 
 #[pymodule]
-fn jenks_breaks(_py: Python, m: &PyModule) -> PyResult<()> {
+fn jenks_breaks(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(jenks_breaks_optimized, m)?)?;
     Ok(())
 }
