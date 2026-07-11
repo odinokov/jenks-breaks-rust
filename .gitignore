@@ -1,8 +1,0 @@
-# Ignore the target directory (compiled binaries)
-target/
-# Ignore build artifacts
-*.rlib
-*.lock
-# Ignore the Cargo registry, you don't need to include dependencies
-/target/
-/Cargo.lock

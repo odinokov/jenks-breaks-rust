@@ -1,0 +1,30 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "jenks_breaks"
+version = "0.2.0"
+description = "Fast exact Fisher-Jenks natural breaks (1-D minimum-SSE partitioning) via SMAWK"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [{ name = "Denis Odinokov" }]
+keywords = ["jenks", "natural-breaks", "fisher-jenks", "classification", "cartography"]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering",
+    "Intended Audience :: Science/Research",
+]
+dependencies = ["numpy>=1.20"]
+
+[project.urls]
+Homepage = "https://github.com/odinokov/jenks-breaks-rust"
+Repository = "https://github.com/odinokov/jenks-breaks-rust"
+
+[tool.maturin]
+python-source = "python"
+module-name = "jenks_breaks._native"
+features = ["extension-module"]

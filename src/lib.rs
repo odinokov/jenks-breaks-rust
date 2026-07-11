@@ -1,118 +1,156 @@
+//! Python bindings for the Fisher-Jenks natural-breaks core.
+//!
+//! Accepts 1-D float32 or float64 NumPy arrays (computed in f64), validates input,
+//! and releases the GIL during the O(k*n) SMAWK optimization.
+
+pub mod core;
+pub mod smawk;
+
+use numpy::PyReadonlyArray1;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::wrap_pyfunction;
-use numpy::{PyReadonlyArray1};
 
-#[inline(always)]
-fn sse_cost(a: usize, b: usize, s: &[f64], s2: &[f64]) -> f64 {
-    // segment is 1-based inclusive [a..b], assume a<=b
-    let w = (b - a + 1) as f64;
-    let sum = s[b] - s[a - 1];
-    let sq  = s2[b] - s2[a - 1];
-    sq - (sum * sum) / w
-}
+/// Copy a 1-D NumPy array into an owned `Vec<f64>` while validating the contract.
+///
+/// The copy is necessary before releasing the GIL: another Python thread can mutate a
+/// NumPy array while the core is running.  Combining the copy and validation avoids a
+/// second full pass over input data, which is particularly valuable for `k == 1` and
+/// small class counts.
+fn copy_and_validate<I>(
+    values: I,
+    n: usize,
+    num_classes: usize,
+    assume_sorted: bool,
+) -> PyResult<Vec<f64>>
+where
+    I: Iterator<Item = f64>,
+{
+    if n == 0 {
+        return Err(PyValueError::new_err("data must be non-empty"));
+    }
+    if num_classes < 1 || num_classes > n {
+        return Err(PyValueError::new_err(format!(
+            "num_classes must be in 1..={n}, got {num_classes}"
+        )));
+    }
 
-// Divide & Conquer DP for monotone opt:
-// dp_j[i] = min_{k in [j-1..i-1]} dp_{j-1}[k] + cost(k+1, i)
-// argmin_j[i] is the optimizer k for backtracking.
-// We assume optimal k is monotone in i (true for SSE segmentation / Jenks).
-fn compute_layer(
-    j: usize,
-    i_left: usize,
-    i_right: usize,
-    k_left: usize,
-    k_right: usize,
-    dp_prev: &[f64],
-    dp_cur: &mut [f64],
-    argmin_cur: &mut [usize],
-    s: &[f64],
-    s2: &[f64],
-) {
-    if i_left > i_right { return; }
-    let mid = (i_left + i_right) / 2;
-
-    let mut best_k = k_left;
-    let mut best = f64::INFINITY;
-    // k must satisfy j-1 <= k <= mid-1
-    let lo = k_left.max(j - 1);
-    let hi = k_right.min(mid - 1);
-
-    for k in lo..=hi {
-        let v = dp_prev[k] + sse_cost(k + 1, mid, s, s2);
-        if v < best {
-            best = v;
-            best_k = k;
+    let mut out = Vec::with_capacity(n);
+    if assume_sorted {
+        for value in values {
+            if !value.is_finite() {
+                return Err(PyValueError::new_err(
+                    "data contains NaN or infinite values",
+                ));
+            }
+            out.push(value);
+        }
+    } else {
+        let mut previous = 0.0;
+        for (index, value) in values.enumerate() {
+            if !value.is_finite() {
+                return Err(PyValueError::new_err(
+                    "data contains NaN or infinite values",
+                ));
+            }
+            if index != 0 && value < previous {
+                return Err(PyValueError::new_err(
+                    "data must be sorted ascending (or pass assume_sorted=True to skip the check)",
+                ));
+            }
+            previous = value;
+            out.push(value);
         }
     }
-    dp_cur[mid] = best;
-    argmin_cur[mid] = best_k;
-
-    // Monotone ranges
-    if i_left <= mid.saturating_sub(1) {
-        compute_layer(j, i_left, mid - 1, k_left, best_k, dp_prev, dp_cur, argmin_cur, s, s2);
-    }
-    if mid + 1 <= i_right {
-        compute_layer(j, mid + 1, i_right, best_k, k_right, dp_prev, dp_cur, argmin_cur, s, s2);
-    }
+    Ok(out)
 }
 
-#[pyfunction]
-fn jenks_breaks_optimized<'py>(
-    py: Python<'py>,
-    data: PyReadonlyArray1<'py, f64>,   // borrow NumPy array, no copy
-    num_classes: usize
+/// Extract a supported NumPy dtype, then copy and validate it in a single pass.
+fn to_f64_vec(
+    data: &Bound<'_, PyAny>,
+    num_classes: usize,
+    assume_sorted: bool,
+) -> PyResult<Vec<f64>> {
+    if let Ok(array) = data.extract::<PyReadonlyArray1<f64>>() {
+        let view = array.as_array();
+        return copy_and_validate(view.iter().copied(), view.len(), num_classes, assume_sorted);
+    }
+    if let Ok(array) = data.extract::<PyReadonlyArray1<f32>>() {
+        let view = array.as_array();
+        return copy_and_validate(
+            view.iter().map(|&value| value as f64),
+            view.len(),
+            num_classes,
+            assume_sorted,
+        );
+    }
+    Err(PyValueError::new_err(
+        "data must be a 1-D float32 or float64 numpy array",
+    ))
+}
+
+fn indices_impl(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    num_classes: usize,
+    assume_sorted: bool,
 ) -> PyResult<Vec<usize>> {
-    let x = data.as_slice()?; // &[f64]
-    let n = x.len();
-    if num_classes == 0 || num_classes > n {
-        return Err(pyo3::exceptions::PyValueError::new_err("Invalid num_classes."));
-    }
+    let x = to_f64_vec(data, num_classes, assume_sorted)?;
+    Ok(py.detach(|| core::jenks_indices(&x, num_classes)))
+}
 
-    // Prefix sums (1-based)
-    let mut s  = vec![0.0; n + 1];
-    let mut s2 = vec![0.0; n + 1];
-    for i in 1..=n {
-        let v = x[i - 1];
-        s[i]  = s[i - 1] + v;
-        s2[i] = s2[i - 1] + v * v;
-    }
+/// Zero-based end index of each of the first `num_classes - 1` classes.
+#[pyfunction]
+#[pyo3(signature = (data, num_classes, *, assume_sorted=false))]
+fn jenks_break_indices(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    num_classes: usize,
+    assume_sorted: bool,
+) -> PyResult<Vec<usize>> {
+    indices_impl(py, data, num_classes, assume_sorted)
+}
 
-    // DP buffers
-    let mut dp_prev = vec![f64::INFINITY; n + 1];
-    let mut dp_cur  = vec![f64::INFINITY; n + 1];
+/// jenkspy-compatible boundary values: `[min, ...upper bounds..., max]` (length `num_classes + 1`).
+#[pyfunction]
+#[pyo3(signature = (data, num_classes, *, assume_sorted=false))]
+fn jenks_breaks(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    num_classes: usize,
+    assume_sorted: bool,
+) -> PyResult<Vec<f64>> {
+    let x = to_f64_vec(data, num_classes, assume_sorted)?;
+    let indices = py.detach(|| core::jenks_indices(&x, num_classes));
+    let mut out = Vec::with_capacity(num_classes + 1);
+    out.push(x[0]);
+    out.extend(indices.iter().map(|&index| x[index]));
+    out.push(x[x.len() - 1]);
+    Ok(out)
+}
 
-    // Backpointers: argmin[j][i] stores k that ends segment j-1 at i=k (1..n)
-    let mut argmin = vec![0usize; (num_classes + 1) * (n + 1)];
-    let idx = |j: usize, i: usize| j * (n + 1) + i;
-
-    // j = 1: one class for first i points
-    for i in 1..=n {
-        dp_prev[i] = sse_cost(1, i, &s, &s2);
-        argmin[idx(1, i)] = 0; // previous end at k=0
-    }
-
-    // Heavy compute without holding the GIL
-    py.allow_threads(|| {
-        for j in 2..=num_classes {
-            // compute dp_cur[i] for i in [j..n] using D&C; valid k in [j-1..i-1]
-            compute_layer(j, j, n, j - 1, n - 1, &dp_prev, &mut dp_cur, &mut argmin[idx(j, 0)..idx(j, 0) + (n + 1)], &s, &s2);
-            std::mem::swap(&mut dp_prev, &mut dp_cur);
-            dp_cur.fill(f64::INFINITY);
-        }
-    });
-
-    // Backtrack breaks (return zero-based end indices of the earlier classes)
-    let mut breaks = vec![0usize; num_classes - 1];
-    let mut i = n;
-    for j in (2..=num_classes).rev() {
-        let k = argmin[idx(j, i)];   // k in 0..i-1 (1-based end at k)
-        breaks[j - 2] = k.saturating_sub(1); // convert to zero-based end index
-        i = k;
-    }
-    Ok(breaks)
+/// Deprecated alias for [`jenks_break_indices`]; kept for backward compatibility.
+#[pyfunction]
+#[pyo3(signature = (data, num_classes))]
+fn jenks_breaks_optimized(
+    py: Python<'_>,
+    data: &Bound<'_, PyAny>,
+    num_classes: usize,
+) -> PyResult<Vec<usize>> {
+    let category = py.get_type::<pyo3::exceptions::PyDeprecationWarning>();
+    py.import("warnings")?.call_method1(
+        "warn",
+        (
+            "jenks_breaks_optimized is deprecated; use jenks_break_indices",
+            &category,
+        ),
+    )?;
+    indices_impl(py, data, num_classes, false)
 }
 
 #[pymodule]
-fn jenks_breaks(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(jenks_breaks_optimized, m)?)?;
+fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(jenks_break_indices, module)?)?;
+    module.add_function(wrap_pyfunction!(jenks_breaks, module)?)?;
+    module.add_function(wrap_pyfunction!(jenks_breaks_optimized, module)?)?;
     Ok(())
 }
