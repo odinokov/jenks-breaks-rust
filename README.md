@@ -92,17 +92,27 @@ array. Sorting and finiteness are validated (`ValueError` otherwise); pass
 ## Benchmarks
 
 `num_classes = 5`, random uniform data, best-of-many on one machine
-(`python bench/benchmark.py`). `jenkspy` is ~`O(k·n²)` and is capped at `n = 10_000`;
-the Rust core keeps scaling far past where `jenkspy` becomes impractical. jenkspy timings
-vary run-to-run — the Rust column is the stable comparison.
+(`python bench/benchmark.py`). Both libraries are **compiled native extensions** —
+[`jenkspy`](https://github.com/mthh/jenkspy) is a Cython/C build — so this is *not* a
+"compiled vs interpreted" comparison. The gap is **algorithmic**: jenks-breaks is
+**O(k·n)** (SMAWK), while jenkspy is roughly **O(k·n²)** and becomes impractical past
+~10⁴ points. jenkspy timings vary run-to-run; the Rust column is the stable side.
 
-| n | jenks_breaks (Rust) | jenkspy | speedup |
-|---|--------------------:|--------:|--------:|
-| 100 | 0.009 ms | 0.08 ms | ~9× |
-| 1 000 | 0.100 ms | 2.3 ms | ~23× |
-| 10 000 | 1.674 ms | ~230 ms | ~100× |
-| 100 000 | 18.96 ms | — | — |
-| 1 000 000 | 315.4 ms | — | — |
+| n | jenks-breaks (Rust · O(k·n)) | jenkspy (Cython · ~O(k·n²)) | speedup |
+|---|---:|---:|---:|
+| 100 | 0.009 ms | 0.081 ms | ~9× |
+| 1 000 | 0.097 ms | 2.23 ms | ~23× |
+| 10 000 | 1.66 ms | ~243 ms | ~150× |
+| 100 000 | 20.5 ms | (infeasible) | — |
+| 1 000 000 | 0.31 s | (infeasible) | — |
+
+> A naive **pure-Python** Fisher–Jenks DP (also O(k·n²)) ranges from ~750× slower at
+> n=100 to ~27,000× at n=5,000 — but most of that is interpreter overhead. jenkspy is the
+> fair baseline, where the gap is purely the SMAWK algorithm.
+
+Beyond speed, jenks-breaks is also **more numerically robust**: jenkspy and the naive
+Python DP compute segment cost with the raw `Σx² − (Σx)²/n` formula, which loses precision
+on large-offset data, whereas jenks-breaks centers first and stays correct.
 
 ## How it works
 
